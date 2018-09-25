@@ -11,29 +11,23 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AlertDialog;
-import android.util.Log;
 import android.view.WindowManager;
 
-/**
- * 权限获取页面
- * <p/>
- */
-public class PermissionsActivity extends Activity {
+public class PerActivity extends Activity {
 
-    public static final int PERMISSIONS_GRANTED = 0; // 权限授权
-    public static final int PERMISSIONS_DENIED = 1; // 权限拒绝
+    public static final int PERMISSIONS_GRANTED = 0;
+    public static final int PERMISSIONS_DENIED = 1;
 
 
-    private static final int PERMISSION_REQUEST_CODE = 0; // 系统权限管理页面的参数
-    private static final String EXTRA_PERMISSIONS = "extra_permission"; // 权限参数
-    private static final String PACKAGE_URL_SCHEME = "package:"; // 方案
+    private static final int PERMISSION_REQUEST_CODE = 0;
+    private static final String EXTRA_PERMISSIONS = "extra_permission";
+    private static final String PACKAGE_URL_SCHEME = "package:";
 
-    private PermissionsChecker mChecker; // 权限检测器
-    private boolean isRequireCheck; // 是否需要系统权限检测, 防止和系统提示框重叠
+    private PerChecker mChecker;
+    private boolean isRequireCheck;
 
-    // 启动当前权限页面的公开接口
     public static void startActivityForResult(Activity activity, int requestCode, String... permissions) {
-        Intent intent = new Intent(activity, PermissionsActivity.class);
+        Intent intent = new Intent(activity, PerActivity.class);
         intent.putExtra(EXTRA_PERMISSIONS, permissions);
         ActivityCompat.startActivityForResult(activity, intent, requestCode, null);
     }
@@ -41,13 +35,11 @@ public class PermissionsActivity extends Activity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (getIntent() == null || !getIntent().hasExtra(EXTRA_PERMISSIONS)) {
-            throw new RuntimeException("PermissionsActivity需要使用静态startActivityForResult方法启动!");
-        }
+
         setContentView(R.layout.activity_permissions);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
 
-        mChecker = new PermissionsChecker(this);
+        mChecker = new PerChecker(this);
         isRequireCheck = true;
     }
 
@@ -57,9 +49,9 @@ public class PermissionsActivity extends Activity {
         if (isRequireCheck) {
             String[] permissions = getPermissions();
             if (mChecker.lacksPermissions(permissions)) {
-                requestPermissions(permissions); // 请求权限
+                requestPermissions(permissions);
             } else {
-                allPermissionsGranted(); // 全部权限都已获取
+                allPermissionsGranted();
             }
         } else {
             isRequireCheck = true;
@@ -82,21 +74,8 @@ public class PermissionsActivity extends Activity {
         finish();
     }
 
-    /**
-     * 用户权限处理,
-     * 如果全部获取, 则直接过.
-     * 如果权限缺失, 则提示Dialog.
-     *
-     * @param requestCode  请求码
-     * @param permissions  权限
-     * @param grantResults 结果
-     */
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        for (int i = 0; i < grantResults.length; i++) {
-
-            Log.e("aaa", "onRequestPermissionsResult: "+grantResults[i]);
-        }
         if (requestCode == PERMISSION_REQUEST_CODE && hasAllPermissionsGranted(grantResults)) {
             isRequireCheck = true;
             allPermissionsGranted();
@@ -118,7 +97,7 @@ public class PermissionsActivity extends Activity {
 
     // 显示缺失权限提示
     private void showMissingPermissionDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(PermissionsActivity.this);
+        AlertDialog.Builder builder = new AlertDialog.Builder(PerActivity.this);
         builder.setTitle("提示");
         builder.setMessage("需要相机权限");
 
@@ -143,7 +122,6 @@ public class PermissionsActivity extends Activity {
         builder.show();
     }
 
-    // 启动应用的设置
     private void startAppSettings() {
         Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
         intent.setData(Uri.parse(PACKAGE_URL_SCHEME + getPackageName()));

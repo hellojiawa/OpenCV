@@ -81,8 +81,8 @@ public class MainActivity extends AppCompatActivity implements
         //eventbus
         EventBus.getDefault().register(this);
 
-        if (new PermissionsChecker(this).lacksPermissions(PERMISSIONS)) {
-            PermissionsActivity.startActivityForResult(this, REQUEST_CODE, PERMISSIONS);
+        if (new PerChecker(this).lacksPermissions(PERMISSIONS)) {
+            PerActivity.startActivityForResult(this, REQUEST_CODE, PERMISSIONS);
         }
 
     }
@@ -114,7 +114,7 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_CODE && resultCode == PermissionsActivity.PERMISSIONS_DENIED) {
+        if (requestCode == REQUEST_CODE && resultCode == PerActivity.PERMISSIONS_DENIED) {
             finish();
         }
     }
