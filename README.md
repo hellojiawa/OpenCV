@@ -1,3 +1,2 @@
 
-tracking\n
 hand gesture
