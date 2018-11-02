@@ -3,6 +3,7 @@
           package="com.funsnap.opencv">
 
     <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
 
@@ -14,8 +15,9 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
-            android:name="com.funsnap.opencv.ui.MainActivity"
+            android:name=".ui.MainActivity"
             android:screenOrientation="landscape">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
 
@@ -23,9 +25,13 @@
             </intent-filter>
         </activity>
         <activity
-            android:name="com.funsnap.opencv.permission.PerActivity"
+            android:name=".permission.PerActivity"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
+        <activity
+            android:name=".ui.TestActivity"
+            android:screenOrientation="landscape">
+        </activity>
     </application>
 
 </manifest>

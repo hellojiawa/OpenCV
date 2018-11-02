@@ -105,7 +105,7 @@ public class ObjectDetector {
         mCascadeClassifier.detectMultiScale(
                 gray, // 要检查的灰度图像
                 object, // 检测到的人脸
-                1.05, // 表示在前后两次相继的扫描中，搜索窗口的比例系数。默认为1.1即每次搜索窗口依次扩大10%;
+                1.1, // 表示在前后两次相继的扫描中，搜索窗口的比例系数。默认为1.1即每次搜索窗口依次扩大10%;
                 mMinNeighbors, // 默认是3 控制误检测，表示默认几次重叠检测到人脸，才认为人脸存在
                 Objdetect.CASCADE_SCALE_IMAGE,
                 getSize(gray, mRelativeObjectWidth, mRelativeObjectHeight), // 目标最小可能的大小

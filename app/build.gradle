@@ -18,7 +18,7 @@ android {
             }
         }
 
-        ndk{
+        ndk {
             abiFilters 'armeabi-v7a'
         }
     }
@@ -45,9 +45,8 @@ dependencies {
     androidTestImplementation 'com.android.support.test:runner:1.0.2'
     androidTestImplementation 'com.android.support.test.espresso:espresso-core:3.0.2'
     implementation project(':openCVLibrary340dev')
-
     //eventbus
     implementation 'org.greenrobot:eventbus:3.1.1'
-
     implementation 'org.tensorflow:tensorflow-android:1.10.0'
+    implementation files('libs/ZHTJgesture_V1.1.jar')
 }

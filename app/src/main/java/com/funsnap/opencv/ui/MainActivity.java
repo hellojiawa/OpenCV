@@ -1,12 +1,16 @@
 package com.funsnap.opencv.ui;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
+import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.support.v7.app.AppCompatActivity;
 import android.view.Display;
@@ -23,6 +27,8 @@ import com.funsnap.opencv.permission.PerActivity;
 import com.funsnap.opencv.permission.PerChecker;
 import com.funsnap.opencv.tensorflower.classifier.Recognition;
 import com.funsnap.opencv.tensorflower.classifier.impl.TensorFlowObjectDetectionAPIModel;
+import com.thinkjoy.zhthinkjoygesturedetectlib.GestureInfo;
+import com.thinkjoy.zhthinkjoygesturedetectlib.ZHThinkjoyGesture;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -34,16 +40,13 @@ import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
-import org.opencv.core.MatOfInt;
-import org.opencv.core.MatOfInt4;
-import org.opencv.core.MatOfPoint;
-import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.MatOfRect;
 import org.opencv.core.MatOfRect2d;
 import org.opencv.core.Rect2d;
-import org.opencv.core.RotatedRect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
+import org.opencv.dnn.Dnn;
+import org.opencv.dnn.Net;
 import org.opencv.imgproc.Imgproc;
 import org.opencv.me.ObjectDetector;
 import org.opencv.tracking.MultiTracker;
@@ -52,12 +55,12 @@ import org.opencv.tracking.TrackerKCF;
 import org.opencv.tracking.TrackerMOSSE;
 import org.opencv.tracking.TrackerTLD;
 
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
-
-import static java.lang.Math.abs;
 
 public class MainActivity extends AppCompatActivity implements
         CameraBridgeViewBase.CvCameraViewListener2,
@@ -76,9 +79,6 @@ public class MainActivity extends AppCompatActivity implements
     private static final String TF_OD_API_MODEL_FILE = "file:///android_asset/ssd5_optimized_inference_graph.pb";
     private static final String TF_OD_API_LABELS_FILE = "hand_label_map.txt";
 
-//    private static final String TF_OD_API_MODEL_FILE = "file:///android_asset/frozen_inference_graph.pb";
-//    private static final String TF_OD_API_LABELS_FILE = "hand_detection.txt";
-
 
     private static final Float MINIMUM_CONFIDENCE_TF_OD_API = 0.3f;
 
@@ -86,11 +86,10 @@ public class MainActivity extends AppCompatActivity implements
     private RectView mRectView;
 
     private boolean mTracking = false;
-    private boolean mDetection = false;
+    private boolean mDetection, mClassify = false;
     private Rect2d mRect2d = new Rect2d(0, 0, 0, 0);
     private int mButtonID;
     private boolean mUpdated = false;
-    private boolean mDetectionV = false;
 
     MultiTracker mMultiTracker = null;
     MatOfRect2d mMatOfRect2d = null;
@@ -101,6 +100,10 @@ public class MainActivity extends AppCompatActivity implements
     private MatOfRect mObject;
     private TensorFlowObjectDetectionAPIModel detector;
     private ImageView mPreImageView;
+    private ZHThinkjoyGesture mGesture;
+    private Bitmap mBitmap, mBitmapDraw;
+    private Handler mHandler;
+    private HandlerThread mHandlerThread;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -121,10 +124,13 @@ public class MainActivity extends AppCompatActivity implements
         //eventbus
         EventBus.getDefault().register(this);
 
+        //手势识别
+        mGesture = ZHThinkjoyGesture.getInstance(this);
+        mGesture.init();
+
         if (new PerChecker(this).lacksPermissions(PERMISSIONS)) {
             PerActivity.startActivityForResult(this, REQUEST_CODE, PERMISSIONS);
         }
-
     }
 
     @Override
@@ -169,26 +175,11 @@ public class MainActivity extends AppCompatActivity implements
             }
         });
 
-        findViewById(R.id.btn_start_palm).setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startDetectionPlam();
-                disableRadioGroup(mRadioGroup);
-            }
-        });
-
-        findViewById(R.id.btn_start_hand).setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startDetectionHand();
-                disableRadioGroup(mRadioGroup);
-            }
-        });
-
         findViewById(R.id.btn_clear).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 exitTracking();
+//                startDetectionPlam();
             }
         });
 
@@ -197,9 +188,23 @@ public class MainActivity extends AppCompatActivity implements
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 if (isChecked) {
-                    mDetectionV = true;
+                    startDetection();
                 } else {
-                    mDetectionV = false;
+                    mDetection = false;
+                }
+            }
+        });
+
+        Switch switchClassify = findViewById(R.id.switch_classify);
+        switchClassify.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    mClassify = true;
+                    mPreImageView.setVisibility(View.VISIBLE);
+                } else {
+                    mClassify = false;
+                    mPreImageView.setVisibility(View.GONE);
                 }
             }
         });
@@ -232,6 +237,7 @@ public class MainActivity extends AppCompatActivity implements
         mRectView.clearRects();
         mTracking = false;
         mDetection = false;
+        mClassify = false;
         enableRadioGroup(mRadioGroup);
     }
 
@@ -285,12 +291,13 @@ public class MainActivity extends AppCompatActivity implements
 
                     }
 
+                    mRects.get(0).set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRects);
                     tracker.clear();
                 }
             }).start();
         }
     }
-
 
     private void startMultiTrack(final Rect target) {
         if (!mTracking) {
@@ -353,11 +360,65 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
+    List<GestureInfo> mGestureInfos = new ArrayList<>();
+
+    private void startDetection() {
+        if (!mDetection) {
+            mRects.clear();
+            mRects.add(new Rect(0, 0, 0, 0));
+            mDetection = true;
+
+            new Thread(new Runnable() {
+
+                @Override
+                public void run() {
+                    while (mDetection) {
+                        mGestureInfos.clear();
+                        mGesture.gestureDetect(mBitmap, mGestureInfos);
+
+                        if (mGestureInfos.size() > 0) {
+                            GestureInfo info = mGestureInfos.get(0);
+                            mRects.get(0).set((int) (info.gestureRectangle[0].x * ratio), (int) (info.gestureRectangle[0].y * ratio),
+                                    (int) (info.gestureRectangle[1].x * ratio), (int) (info.gestureRectangle[1].y * ratio));
+
+                            switch (info.type) {
+                                case 0:
+                                    mRectView.text = "FIST";
+                                    break;
+                                case 1:
+                                    mRectView.text = "PALM";
+                                    break;
+                                case 2:
+                                    mRectView.text = "OK";
+                                    break;
+                                case 3:
+                                    mRectView.text = "YEAH";
+                                    break;
+                                case 4:
+                                    mRectView.text = "ONE FINGER";
+                                    break;
+                                default:
+                                    mRectView.text = "NO GESTURE";
+                                    break;
+                            }
+
+                        } else {
+                            mRects.get(0).set(0, 0, 0, 0);
+                        }
+
+                        EventBus.getDefault().post(mRects);
+                    }
+                }
+            }).start();
+        }
+    }
 
     /**
      * 开启手掌识别
      */
     private void startDetectionPlam() {
+
+
         if (!mDetection) {
             mRects.clear();
             mRects.add(new Rect(0, 0, 0, 0));
@@ -390,11 +451,13 @@ public class MainActivity extends AppCompatActivity implements
                         mCloneGray.release();
                         EventBus.getDefault().post(mRects);
                     }
+
+                    mRects.get(0).set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRects);
                 }
             }).start();
         }
     }
-
 
     /**
      * 开启手识别
@@ -454,6 +517,9 @@ public class MainActivity extends AppCompatActivity implements
                         mClone.release();
                         EventBus.getDefault().post(mRects);
                     }
+
+                    mRects.get(0).set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRects);
                 }
             }).start();
         }
@@ -500,6 +566,49 @@ public class MainActivity extends AppCompatActivity implements
         m.release();
     }
 
+    private static String getPath(String file, Context context) {
+        AssetManager assetManager = context.getAssets();
+        BufferedInputStream inputStream = null;
+        try {
+            // Read data from assets.
+            inputStream = new BufferedInputStream(assetManager.open(file));
+            byte[] data = new byte[inputStream.available()];
+            inputStream.read(data);
+            inputStream.close();
+            // Create copy file in storage.
+            File outFile = new File(context.getFilesDir(), file);
+            FileOutputStream os = new FileOutputStream(outFile);
+            os.write(data);
+            os.close();
+            // Return a path to file which may be read in common way.
+            return outFile.getAbsolutePath();
+        } catch (IOException ex) {
+            String message = ex.getMessage();
+        }
+        return "";
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        mHandlerThread = new HandlerThread("back");
+        mHandlerThread.start();
+        mHandler = new Handler(mHandlerThread.getLooper());
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+
+        mHandlerThread.quitSafely();
+        mHandler = null;
+    }
+
+    private synchronized void runInBackground(final Runnable r) {
+        if (mHandler != null) mHandler.post(r);
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -507,6 +616,9 @@ public class MainActivity extends AppCompatActivity implements
         //opencv
         mJava_camera.disableView();
         exitTracking();
+
+        //hand
+//        mGesture.release();
 
         //eventbus
         EventBus.getDefault().unregister(this);
@@ -520,13 +632,19 @@ public class MainActivity extends AppCompatActivity implements
         ratio = point.y / 480.0f;
 
         mMat = new Mat(480, 640, CvType.CV_8UC3);
+        mMatDraw = new Mat(480, 640, CvType.CV_8UC4);
         mMatGray = new Mat(480, 640, CvType.CV_8UC1);
         mMatTensor = new Mat(240, 320, CvType.CV_8UC3);
-        hsvMat = new Mat(height, width, CvType.CV_8UC4);
-        mask = new Mat(height, width, CvType.CV_8UC4);
 
-        mPalmDetector = new ObjectDetector(getApplicationContext(), R.raw.palm, 6, 0.04F, 0.08F, new Scalar(255, 0, 255, 255));
+        mBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        mBitmapDraw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+
+        mPalmDetector = new ObjectDetector(getApplicationContext(), R.raw.face, 4, 0.04F, 0.08F, new Scalar(255, 0, 255, 255));
         mObject = new MatOfRect();
+
+        String proto = getPath("MobileNetSSD_deploy.prototxt", this);
+        String weights = getPath("MobileNetSSD_deploy.caffemodel", this);
+        net = Dnn.readNetFromCaffe(proto, weights);
     }
 
     @Override
@@ -534,19 +652,6 @@ public class MainActivity extends AppCompatActivity implements
 
     }
 
-
-    //V字检测相关
-    Mat hsvMat, mask, contourMat;
-    private float[] depths;
-    private org.opencv.core.Point[] startPts, endPts, centerPts;
-    //开闭操作的大小和中心点
-    private Size erodeSize = new Size(3, 3);
-    private org.opencv.core.Point erodePoint = new org.opencv.core.Point(1, 1);
-    Scalar hsvMin = new Scalar(95, 10, 100);
-    Scalar hsvMax = new Scalar(133, 142, 232);
-    private ArrayList<Integer> fingerTips = new ArrayList<Integer>();
-    private int division = 5;
-    private static final int MAX_FINGER_DISTANCE = 20;
 
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
@@ -557,164 +662,93 @@ public class MainActivity extends AppCompatActivity implements
             Imgproc.cvtColor(mRgba, mMat, Imgproc.COLOR_RGBA2RGB);
         }
 
-
-        if (mDetectionV) {
-            //二值化
-            Imgproc.GaussianBlur(mRgba, mRgba, new Size(3, 3), 0);
-            Imgproc.cvtColor(mRgba, hsvMat, Imgproc.COLOR_BGR2HSV);
-            Core.inRange(hsvMat, hsvMin, hsvMax, mask);
-
-//            //canny边缘检测
-//            Mat gray = new Mat();
-//            Imgproc.cvtColor(mRgba, gray, Imgproc.COLOR_RGBA2GRAY);
-//            Mat edges = new Mat();
-//            Imgproc.Canny(gray, edges, 50, 150, 3, true);
-
-            //开闭操作
-            Mat element = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, erodeSize, erodePoint);
-            Imgproc.morphologyEx(mask, mask, Imgproc.MORPH_OPEN, element);
-            Imgproc.morphologyEx(mask, mask, Imgproc.MORPH_CLOSE, element);
-
-            List<MatOfPoint> contours = new ArrayList<MatOfPoint>();
-            Mat hierarchy = new Mat();
-            Imgproc.findContours(mask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
-
-            for (Iterator<MatOfPoint> iterator = contours.iterator(); iterator.hasNext(); ) {
-                MatOfPoint contour = iterator.next();
-                //根据面积删除
-                double contourArea = Imgproc.contourArea(contour);
-
-                //根据宽高比删除
-                RotatedRect rotatedRect = Imgproc.minAreaRect(new MatOfPoint2f(contour.toArray()));
-                double ratio = rotatedRect.size.width / rotatedRect.size.height;
-
-                if (contourArea < 3000 || contourArea > 50000
-//                        || (ratio > 0.55f && ratio < 1.8f)
-                        )
-                    iterator.remove();
-
-            }
-
-            for (int j = 0; j < contours.size(); j++) {
-                MatOfPoint bigContour = contours.get(j);
-
-                org.opencv.core.Rect rect = Imgproc.boundingRect(bigContour);
-                Imgproc.rectangle(mRgba, new org.opencv.core.Point(rect.x, rect.y),
-                        new org.opencv.core.Point(rect.x + rect.width, rect.y + rect.height), new Scalar(255, 255, 255));
-
-                //寻找手指
-                findFingerTips(bigContour);
-
-                if (fingerTips.size() != 0) {
-                    for (int i = 0; i < fingerTips.size(); i++) {
-
-                        Integer index = fingerTips.get(i);
-                        Imgproc.line(mRgba, centerPts[index], startPts[index], new Scalar(255, 0, 0), 4);
-                        Imgproc.line(mRgba, centerPts[index], endPts[index], new Scalar(255, 0, 0), 4);
-                        Imgproc.line(mRgba, startPts[index], endPts[index], new Scalar(0, 255, 0), 2);
-
-                        Imgproc.circle(mRgba, startPts[index], 16, new Scalar(255, 204, 0));
-                        Imgproc.circle(mRgba, endPts[index], 16, new Scalar(255, 204, 0));
-                        Imgproc.circle(mRgba, centerPts[index], 16, new Scalar(0, 0, 255));
-
-                    }
-                }
-            }
+        if (mDetection) {
+            Utils.matToBitmap(mRgba, mBitmap);
         }
 
+        if (mClassify) {
+            if (!detection) {
+                detection = true;
+                runInBackground(new Runnable() {
+                    @Override
+                    public void run() {
+                        // Forward image through network.
+                        Mat blob = Dnn.blobFromImage(mMat, IN_SCALE_FACTOR,
+                                new Size(IN_WIDTH, IN_HEIGHT),
+                                new Scalar(MEAN_VAL, MEAN_VAL, MEAN_VAL), false, false);
+
+                        net.setInput(blob);
+                        Mat detections = net.forward();
+
+                        int cols = mMat.cols();
+                        int rows = mMat.rows();
+                        mMatDraw.setTo(mScalar);
+
+                        //矩阵变换
+                        detections = detections.reshape(1, (int) detections.total() / 7);
+                        for (int i = 0; i < detections.rows(); ++i) {
+                            double confidence = detections.get(i, 2)[0];
+                            if (confidence > THRESHOLD) {
+                                int classId = (int) detections.get(i, 1)[0];
+                                int xLeftBottom = (int) (detections.get(i, 3)[0] * cols);
+                                int yLeftBottom = (int) (detections.get(i, 4)[0] * rows);
+                                int xRightTop = (int) (detections.get(i, 5)[0] * cols);
+                                int yRightTop = (int) (detections.get(i, 6)[0] * rows);
+
+                                // Draw rectangle around detected object.
+                                Imgproc.rectangle(mMatDraw, new org.opencv.core.Point(xLeftBottom, yLeftBottom),
+                                        new org.opencv.core.Point(xRightTop, yRightTop),
+                                        new Scalar(0, 255, 0));
+                                String label = classNames[classId] + ": " + String.format("%.5f", confidence);
+                                int[] baseLine = new int[1];
+                                Size labelSize = Imgproc.getTextSize(label, Core.FONT_HERSHEY_SIMPLEX, 0.5, 2, baseLine);
+                                // Draw background for label.
+                                Imgproc.rectangle(mMatDraw, new org.opencv.core.Point(xLeftBottom, yLeftBottom - labelSize.height),
+                                        new org.opencv.core.Point(xLeftBottom + labelSize.width, yLeftBottom + baseLine[0]),
+                                        new Scalar(0, 0, 0, 255), Core.FILLED);
+                                // Write class name and confidence.
+                                Imgproc.putText(mMatDraw, label, new org.opencv.core.Point(xLeftBottom, yLeftBottom),
+                                        Core.FONT_HERSHEY_SIMPLEX, 0.5, new Scalar(255, 255, 255));
+
+                            }
+                        }
+
+                        Utils.matToBitmap(mMatDraw, mBitmapDraw);
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                mPreImageView.setImageBitmap(mBitmapDraw);
+                            }
+                        });
+
+                        detection = false;
+                    }
+                });
+            }
+        }
 
         mUpdated = true;
         return mRgba;
     }
 
-    private boolean firstFPS = true;
-    private Mat mMat;
+    private Mat mMat, mMatDraw;
     private Mat mMatTensor;
     private Mat mMatGray;
+    private Scalar mScalar = new Scalar(0, 0, 0, 0);
     private float ratio = 1;        //屏幕分辨率与视频分辨率之比
+    private boolean detection = false;
 
+    private Net net;
+    final int IN_WIDTH = 320;
+    final int IN_HEIGHT = 240;
 
-    private void findFingerTips(MatOfPoint approxContour) {
-
-        MatOfInt hull = new MatOfInt();
-
-        Imgproc.convexHull(approxContour, hull, false);
-
-        MatOfInt4 defects = new MatOfInt4();
-        Imgproc.convexityDefects(approxContour, hull, defects);
-
-        int defectsTotal = (int) defects.total();
-
-        startPts = new org.opencv.core.Point[defectsTotal];
-        endPts = new org.opencv.core.Point[defectsTotal];
-        centerPts = new org.opencv.core.Point[defectsTotal];
-        depths = new float[defectsTotal];
-
-        int[] defectBytes = defects.toArray();
-        org.opencv.core.Point[] points = approxContour.toArray();
-
-        for (int i = 0; i < defectsTotal; i++) {
-            final int a = defectBytes[4 * i];        //起始点
-            final int b = defectBytes[4 * i + 1];    //终止点
-            final int c = defectBytes[4 * i + 2];    //凹点
-            int d = defectBytes[4 * i + 3] / 256;    //距离
-
-            startPts[i] = points[a];
-            endPts[i] = points[b];
-            centerPts[i] = points[c];
-            depths[i] = d;
-        }
-
-        reduceTips(defectsTotal, startPts, endPts, centerPts, depths);
-    }
-
-    private void reduceTips(int numPoints, org.opencv.core.Point[] startPts, org.opencv.core.Point[] endPts, org.opencv.core.Point[] centerPts, float[] depths) {
-        fingerTips.clear();
-
-        for (int i = 0; i < numPoints; i++) {
-
-            //起始位置距离剔除
-            if ((abs(startPts[i].x - endPts[i].x)) < MAX_FINGER_DISTANCE
-                    && (abs(startPts[i].y - endPts[i].y) < MAX_FINGER_DISTANCE)) {
-                continue;
-            }
-
-            //屏幕边界剔除
-            if (startPts[i].y > (division - 1) * mask.height() / division ||
-                    endPts[i].y > (division - 1) * mask.height() / division) {
-                continue;
-            }
-
-            //角度剔除
-            double degree1 = getDegree(startPts[i], centerPts[i], endPts[i]);
-            if (degree1 < 15 || degree1 > 65) continue;
-
-            //两边长度剔除
-            int distance1 = getDistance(startPts[i], centerPts[i]);
-            int distance2 = getDistance(endPts[i], centerPts[i]);
-            if (Math.abs(distance1 - distance2) > depths[i] / 3) continue;
-
-            fingerTips.add(i);
-        }
-
-        //只检测到一个V才算是正确的手势
-        if (fingerTips.size() != 1) fingerTips.clear();
-    }
-
-    public int getDistance(org.opencv.core.Point start, org.opencv.core.Point stop) {
-        return (int) Math.sqrt(Math.pow(start.x - stop.x, 2) + Math.pow(start.y - stop.y, 2));
-    }
-
-    //根据三个点，计算角度
-    public double getDegree(org.opencv.core.Point start, org.opencv.core.Point center, org.opencv.core.Point end) {
-        //三角形的两边
-        int distance1 = (int) Math.sqrt(Math.pow(start.x - center.x, 2) + Math.pow(start.y - center.y, 2));
-        int distance2 = (int) Math.sqrt(Math.pow(end.x - center.x, 2) + Math.pow(end.y - center.y, 2));
-        //三角形第三边
-        int distance3 = (int) Math.sqrt(Math.pow(start.x - end.x, 2) + Math.pow(start.y - end.y, 2));
-
-        //余弦定理计算角度
-        double t = (distance1 * distance1 + distance2 * distance2 - distance3 * distance3) / (2 * distance1 * distance2 + 0f);
-        return Math.toDegrees(Math.acos(t));
-    }
+    final double IN_SCALE_FACTOR = 0.007843;
+    final double MEAN_VAL = 127.5;
+    final double THRESHOLD = 0.4;
+    private static final String[] classNames = {"background",
+            "aeroplane", "bicycle", "bird", "boat",
+            "bottle", "bus", "car", "cat", "chair",
+            "cow", "diningtable", "dog", "horse",
+            "motorbike", "person", "pottedplant",
+            "sheep", "sofa", "train", "tvmonitor"};
 }

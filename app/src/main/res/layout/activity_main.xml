@@ -25,12 +25,9 @@
 
         <ImageView
             android:id="@+id/image_view"
-            android:layout_width="120dp"
-            android:layout_height="120dp"
-            android:layout_gravity="bottom"
-            android:layout_margin="10dp"
-            android:padding="10dp"
-            android:scaleType="fitCenter"/>
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitXY"/>
 
     </FrameLayout>
 
@@ -76,7 +73,6 @@
             android:layout_marginTop="5dp"
             android:text="MULTI"/>
 
-
     </RadioGroup>
 
 
@@ -96,31 +92,25 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:text="V检测"
+            android:text="手势检测"
             android:textColor="@color/colorAccent"
             android:textSize="16sp"/>
 
-        <Button
-            android:id="@+id/btn_start_hand"
+        <Switch
+            android:id="@+id/switch_classify"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="5dp"
-            android:text="手掌、拳头分类"
-            android:textColor="@color/colorAccent"/>
-
-        <Button
-            android:id="@+id/btn_start_palm"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="5dp"
-            android:text="手掌识别"
-            android:textColor="@color/colorAccent"/>
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="10dp"
+            android:text="物体分类"
+            android:textColor="@color/colorAccent"
+            android:textSize="16sp"/>
 
         <Button
             android:id="@+id/btn_clear"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="5dp"
+            android:layout_marginTop="10dp"
             android:text="停止"
             android:textColor="@color/colorAccent"/>
     </LinearLayout>

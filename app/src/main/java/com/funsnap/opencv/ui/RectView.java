@@ -3,7 +3,6 @@ package com.funsnap.opencv.ui;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.util.AttributeSet;
@@ -45,12 +44,12 @@ public class RectView extends View {
         mPaint.setStyle(Paint.Style.STROKE);
         mPaint.setStrokeWidth(4.0f);
         mPaint.setColor(Color.parseColor("#00ffff"));
-        mPaint.setPathEffect(new DashPathEffect(new float[]{10, 10}, 0));
+//        mPaint.setPathEffect(new DashPathEffect(new float[]{10, 10}, 0));
 
         mPaintText = new Paint();
-        mPaintText.setStrokeWidth(2.0f);
+        mPaintText.setStrokeWidth(4.0f);
         mPaintText.setColor(Color.parseColor("#ff0000"));
-        mPaintText.setTextSize(36);
+        mPaintText.setTextSize(40);
     }
 
     public RectView(Context context, AttributeSet attrs) {

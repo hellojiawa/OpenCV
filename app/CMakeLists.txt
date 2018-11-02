@@ -11,9 +11,10 @@ add_library( lib_opencv SHARED IMPORTED )
 set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libopencv_java3.so)
 
 
+aux_source_directory(src/main/cpp/ DIR_LIB_SRCS)
 file(GLOB native_srcs "src/main/cpp/*.cpp")
 add_library( # Sets the name of the library.
-             hand-lib
+             mat_util
 
              # Sets the library as a shared library.
              SHARED
@@ -24,7 +25,7 @@ add_library( # Sets the name of the library.
 
 
 find_library( # Sets the name of the path variable.
-              log-lib
+              mat_util
 
               # Specifies the name of the NDK library that
               # you want CMake to locate.
@@ -32,7 +33,7 @@ find_library( # Sets the name of the path variable.
 
 
 target_link_libraries( # Specifies the target library.
-                       hand-lib
+                       mat_util
 
                        lib_opencv
 
