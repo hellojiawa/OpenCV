@@ -9,8 +9,6 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 
-import java.util.ArrayList;
-
 /**
  * TODO
  * version: V1.0 <描述当前版本功能>
@@ -21,7 +19,7 @@ import java.util.ArrayList;
 
 public class RectView extends View {
 
-    ArrayList<Rect> mRects = new ArrayList<>();
+    Rect mRect = new Rect();
     private Paint mPaint;
     public String text;
 
@@ -61,11 +59,9 @@ public class RectView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        for (Rect rect : mRects) {
-            canvas.drawRect(rect, mPaint);
-            if (text != null){
-                canvas.drawText(text,rect.right,rect.top,mPaintText);
-            }
+        canvas.drawRect(mRect, mPaint);
+        if (text != null) {
+            canvas.drawText(text, mRect.right, mRect.top, mPaintText);
         }
     }
 
@@ -84,57 +80,45 @@ public class RectView extends View {
 
                 downX = (int) event.getX();
                 downY = (int) event.getY();
-
-                mRects.add(new Rect());
                 break;
             case MotionEvent.ACTION_MOVE:
                 moveX = (int) event.getX();
                 moveY = (int) event.getY();
 
-                Rect rect = mRects.get(mRects.size() - 1);
-
                 if (moveX > downX) {
-                    rect.left = downX;
-                    rect.right = moveX;
+                    mRect.left = downX;
+                    mRect.right = moveX;
                 } else {
-                    rect.left = moveX;
-                    rect.right = downX;
+                    mRect.left = moveX;
+                    mRect.right = downX;
                 }
 
                 if (moveY > downY) {
-                    rect.top = downY;
-                    rect.bottom = moveY;
+                    mRect.top = downY;
+                    mRect.bottom = moveY;
                 } else {
-                    rect.top = moveY;
-                    rect.bottom = downY;
+                    mRect.top = moveY;
+                    mRect.bottom = downY;
                 }
                 invalidate();
                 break;
 
             case MotionEvent.ACTION_UP:
                 if (null != mTouchListener) {
-                    mTouchListener.onUp(mRects.get(mRects.size() - 1));
+                    mTouchListener.onUp(mRect);
                 }
                 break;
         }
         return true;
     }
 
-    public void setRect(ArrayList<Rect> rects) {
-        if (mRects.size() < rects.size()){
-            for (int i = 0;i <rects.size()-mRects.size();i++){
-                mRects.add(new Rect());
-            }
-        }
-
-        for (int i = 0; i < rects.size(); i++) {
-            mRects.get(i).set(rects.get(i));
-        }
+    public void setRect(Rect rect) {
+        mRect.set(rect);
         invalidate();
     }
 
-    public void clearRects() {
-        mRects.clear();
+    public void reset() {
+        mRect.setEmpty();
         text = null;
         invalidate();
     }

@@ -28,10 +28,6 @@
             android:name=".permission.PerActivity"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.AppCompat.Light.NoActionBar"/>
-        <activity
-            android:name=".ui.TestActivity"
-            android:screenOrientation="landscape">
-        </activity>
     </application>
 
 </manifest>

@@ -54,6 +54,8 @@ import org.opencv.tracking.Tracker;
 import org.opencv.tracking.TrackerKCF;
 import org.opencv.tracking.TrackerMOSSE;
 import org.opencv.tracking.TrackerTLD;
+import org.tensorflow.demo.Classifier;
+import org.tensorflow.demo.TFLiteObjectDetectionAPIModel;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -80,20 +82,26 @@ public class MainActivity extends AppCompatActivity implements
     private static final String TF_OD_API_LABELS_FILE = "hand_label_map.txt";
 
 
+    private static final int TF_OD_API_INPUT_SIZE = 224;//300;
+    private static final boolean TF_OD_API_IS_QUANTIZED = true;
+    private static final String TF_OD_API_MODEL_FILE_LITE = "detect.tflite";
+    private static final String TF_OD_API_LABELS_FILE_LITE = "file:///android_asset/labels_hand.txt";
+
+
     private static final Float MINIMUM_CONFIDENCE_TF_OD_API = 0.3f;
 
     private JavaCameraView mJava_camera;
     private RectView mRectView;
 
     private boolean mTracking = false;
-    private boolean mDetection, mClassify = false;
+    private boolean mDetection, mClassify = false, mDetectionLite = false;
     private Rect2d mRect2d = new Rect2d(0, 0, 0, 0);
     private int mButtonID;
     private boolean mUpdated = false;
 
     MultiTracker mMultiTracker = null;
     MatOfRect2d mMatOfRect2d = null;
-    ArrayList<Rect> mRects = new ArrayList<>();
+    Rect mRect = new Rect();
     ArrayList<TrackerMOSSE> mTrackerMOSSES = new ArrayList<>();
     private RadioGroup mRadioGroup;
     private ObjectDetector mPalmDetector;
@@ -101,9 +109,12 @@ public class MainActivity extends AppCompatActivity implements
     private TensorFlowObjectDetectionAPIModel detector;
     private ImageView mPreImageView;
     private ZHThinkjoyGesture mGesture;
-    private Bitmap mBitmap, mBitmapDraw;
+    private Bitmap mBitmap, mBitmapDraw, mBitmapLite;
     private Handler mHandler;
     private HandlerThread mHandlerThread;
+    private Classifier detector_lite;
+    private float mRatioWidth;
+    private float mRatioHeight;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -127,6 +138,14 @@ public class MainActivity extends AppCompatActivity implements
         //手势识别
         mGesture = ZHThinkjoyGesture.getInstance(this);
         mGesture.init();
+
+        //tensorflow lite 手势识别
+        detector_lite = TFLiteObjectDetectionAPIModel.create(
+                getResources().getAssets(),
+                TF_OD_API_MODEL_FILE_LITE,
+                TF_OD_API_LABELS_FILE_LITE,
+                TF_OD_API_INPUT_SIZE,
+                TF_OD_API_IS_QUANTIZED);
 
         if (new PerChecker(this).lacksPermissions(PERMISSIONS)) {
             PerActivity.startActivityForResult(this, REQUEST_CODE, PERMISSIONS);
@@ -159,18 +178,12 @@ public class MainActivity extends AppCompatActivity implements
         mRectView.setTouchListener(new RectView.ITouchEvent() {
             @Override
             public void onDown() {
-                if (mButtonID != R.id.rb_multi) {
-                    exitTracking();
-                }
+                exitTracking();
             }
 
             @Override
             public void onUp(Rect target) {
-                if (mButtonID != R.id.rb_multi) {
-                    startSingleTrack(target);
-                } else {
-                    startMultiTrack(target);
-                }
+                startSingleTrack(target);
                 disableRadioGroup(mRadioGroup);
             }
         });
@@ -179,7 +192,6 @@ public class MainActivity extends AppCompatActivity implements
             @Override
             public void onClick(View v) {
                 exitTracking();
-//                startDetectionPlam();
             }
         });
 
@@ -209,6 +221,18 @@ public class MainActivity extends AppCompatActivity implements
             }
         });
 
+        Switch switchHand = findViewById(R.id.switch_2);
+        switchHand.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    mDetectionLite = true;
+                } else {
+                    mDetectionLite = false;
+                }
+            }
+        });
+
         RadioButton rbKFC = findViewById(R.id.rb_kfc);
         rbKFC.setOnCheckedChangeListener(this);
         rbKFC.setChecked(true);
@@ -234,10 +258,8 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     private void exitTracking() {
-        mRectView.clearRects();
+        mRectView.reset();
         mTracking = false;
-        mDetection = false;
-        mClassify = false;
         enableRadioGroup(mRadioGroup);
     }
 
@@ -262,13 +284,12 @@ public class MainActivity extends AppCompatActivity implements
                                 target.width() / ratio, target.height() / ratio));
                     }
 
-                    mRects.clear();
-                    mRects.add(new Rect(target));
                     while (mTracking) {
 
                         if (mUpdated) {
                             mUpdated = false;
 
+                            //克隆一份
                             if (mButtonID == R.id.rb_tld || mButtonID == R.id.rb_kfc) {
                                 Mat clone = null;
                                 synchronized (MainActivity.class) {
@@ -282,90 +303,85 @@ public class MainActivity extends AppCompatActivity implements
                                 }
                             }
 
-                            mRects.get(0).set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
+                            mRect.set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
                                     (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
-                            EventBus.getDefault().post(mRects);
+                            EventBus.getDefault().post(mRect);
                         } else {
                             SystemClock.sleep(4);
                         }
 
                     }
 
-                    mRects.get(0).set(0, 0, 0, 0);
-                    EventBus.getDefault().post(mRects);
+                    mRect.set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRect);
                     tracker.clear();
                 }
             }).start();
         }
     }
 
-    private void startMultiTrack(final Rect target) {
-        if (!mTracking) {
-            mMultiTracker = MultiTracker.create();
-            TrackerMOSSE trackerMOSSE = TrackerMOSSE.create();
-            mTrackerMOSSES.add(trackerMOSSE);
-
-            synchronized (MainActivity.class) {
-                mMultiTracker.add(trackerMOSSE, mMat, new Rect2d(target.left / ratio, target.top / ratio,
-                        target.width() / ratio, target.height() / ratio));
-            }
-
-            mMatOfRect2d = new MatOfRect2d();
-
-            mRects.clear();
-            mRects.add(new Rect(target));
-
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    mTracking = true;
-
-                    while (mTracking) {
-                        if (mUpdated) {     //图像数据有更新
-                            mUpdated = false;
-
-                            synchronized (MainActivity.class) {
-                                mMultiTracker.update(mMat, mMatOfRect2d);
-                            }
-                            Rect2d[] rect2ds = mMatOfRect2d.toArray();
-
-                            for (int i = 0; i < mRects.size(); i++) {
-                                Rect2d rect2d = rect2ds[i];
-                                mRects.get(i).set((int) (rect2d.x * ratio), (int) (rect2d.y * ratio),
-                                        (int) ((rect2d.x + rect2d.width) * ratio), (int) ((rect2d.y + rect2d.height) * ratio));
-                            }
-
-                            EventBus.getDefault().post(mRects);
-
-                        } else {
-                            SystemClock.sleep(4);
-                        }
-                    }
-
-                    mMultiTracker.clear();
-                    for (TrackerMOSSE trackerMOSSE : mTrackerMOSSES) {
-                        trackerMOSSE.clear();
-                    }
-                    mTrackerMOSSES.clear();
-                }
-            }).start();
-        } else {
-            TrackerMOSSE trackerMOSSE = TrackerMOSSE.create();
-            mTrackerMOSSES.add(trackerMOSSE);
-            synchronized (MainActivity.class) {
-                mMultiTracker.add(trackerMOSSE, mMat, new Rect2d(target.left / ratio, target.top / ratio,
-                        target.width() / ratio, target.height() / ratio));
-            }
-            mRects.add(new Rect(target));
-        }
-    }
+//    private void startMultiTrack(final Rect target) {
+//        if (!mTracking) {
+//            mMultiTracker = MultiTracker.create();
+//            TrackerMOSSE trackerMOSSE = TrackerMOSSE.create();
+//            mTrackerMOSSES.add(trackerMOSSE);
+//
+//            synchronized (MainActivity.class) {
+//                mMultiTracker.add(trackerMOSSE, mMat, new Rect2d(target.left / ratio, target.top / ratio,
+//                        target.width() / ratio, target.height() / ratio));
+//            }
+//
+//            mMatOfRect2d = new MatOfRect2d();
+//
+//            new Thread(new Runnable() {
+//                @Override
+//                public void run() {
+//                    mTracking = true;
+//
+//                    while (mTracking) {
+//                        if (mUpdated) {     //图像数据有更新
+//                            mUpdated = false;
+//
+//                            synchronized (MainActivity.class) {
+//                                mMultiTracker.update(mMat, mMatOfRect2d);
+//                            }
+//                            Rect2d[] rect2ds = mMatOfRect2d.toArray();
+//
+//                            for (int i = 0; i < mRects.size(); i++) {
+//                                Rect2d rect2d = rect2ds[i];
+//                                mRects.get(i).set((int) (rect2d.x * ratio), (int) (rect2d.y * ratio),
+//                                        (int) ((rect2d.x + rect2d.width) * ratio), (int) ((rect2d.y + rect2d.height) * ratio));
+//                            }
+//
+//                            EventBus.getDefault().post(mRects);
+//
+//                        } else {
+//                            SystemClock.sleep(4);
+//                        }
+//                    }
+//
+//                    mMultiTracker.clear();
+//                    for (TrackerMOSSE trackerMOSSE : mTrackerMOSSES) {
+//                        trackerMOSSE.clear();
+//                    }
+//                    mTrackerMOSSES.clear();
+//                }
+//            }).start();
+//        } else {
+//            TrackerMOSSE trackerMOSSE = TrackerMOSSE.create();
+//            mTrackerMOSSES.add(trackerMOSSE);
+//            synchronized (MainActivity.class) {
+//                mMultiTracker.add(trackerMOSSE, mMat, new Rect2d(target.left / ratio, target.top / ratio,
+//                        target.width() / ratio, target.height() / ratio));
+//            }
+//            mRects.add(new Rect(target));
+//        }
+//    }
 
     List<GestureInfo> mGestureInfos = new ArrayList<>();
 
     private void startDetection() {
         if (!mDetection) {
-            mRects.clear();
-            mRects.add(new Rect(0, 0, 0, 0));
             mDetection = true;
 
             new Thread(new Runnable() {
@@ -378,7 +394,7 @@ public class MainActivity extends AppCompatActivity implements
 
                         if (mGestureInfos.size() > 0) {
                             GestureInfo info = mGestureInfos.get(0);
-                            mRects.get(0).set((int) (info.gestureRectangle[0].x * ratio), (int) (info.gestureRectangle[0].y * ratio),
+                            mRect.set((int) (info.gestureRectangle[0].x * ratio), (int) (info.gestureRectangle[0].y * ratio),
                                     (int) (info.gestureRectangle[1].x * ratio), (int) (info.gestureRectangle[1].y * ratio));
 
                             switch (info.type) {
@@ -403,10 +419,10 @@ public class MainActivity extends AppCompatActivity implements
                             }
 
                         } else {
-                            mRects.get(0).set(0, 0, 0, 0);
+                            mRect.set(0, 0, 0, 0);
                         }
 
-                        EventBus.getDefault().post(mRects);
+                        EventBus.getDefault().post(mRect);
                     }
                 }
             }).start();
@@ -416,13 +432,9 @@ public class MainActivity extends AppCompatActivity implements
     /**
      * 开启手掌识别
      */
-    private void startDetectionPlam() {
-
+    private void startDetectionPalm() {
 
         if (!mDetection) {
-            mRects.clear();
-            mRects.add(new Rect(0, 0, 0, 0));
-
             new Thread(new Runnable() {
 
                 private Mat mCloneGray;
@@ -439,21 +451,21 @@ public class MainActivity extends AppCompatActivity implements
 
                         if (rectPalm.length > 0) {
                             org.opencv.core.Rect rect = rectPalm[0];
-                            mRects.get(0).set((int) (rect.x * ratio), (int) (rect.y * ratio),
+                            mRect.set((int) (rect.x * ratio), (int) (rect.y * ratio),
                                     (int) ((rect.x + rect.width) * ratio), (int) ((rect.y + rect.height) * ratio));
 
 //                            startSingleTrack(mRects.get(0));
 //                            mDetection = false;
                         } else {
-                            mRects.get(0).set(0, 0, 0, 0);
+                            mRect.set(0, 0, 0, 0);
                         }
 
                         mCloneGray.release();
-                        EventBus.getDefault().post(mRects);
+                        EventBus.getDefault().post(mRect);
                     }
 
-                    mRects.get(0).set(0, 0, 0, 0);
-                    EventBus.getDefault().post(mRects);
+                    mRect.set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRect);
                 }
             }).start();
         }
@@ -464,9 +476,6 @@ public class MainActivity extends AppCompatActivity implements
      */
     private void startDetectionHand() {
         if (!mDetection) {
-            mRects.clear();
-            mRects.add(new Rect(0, 0, 0, 0));
-
             new Thread(new Runnable() {
 
                 private Mat mClone;
@@ -495,7 +504,7 @@ public class MainActivity extends AppCompatActivity implements
 
                         if (rect != null && recognition.getConfidence() >= MINIMUM_CONFIDENCE_TF_OD_API) {
                             mRectView.text = recognition.getTitle() + "\n" + String.valueOf(recognition.getConfidence());
-                            mRects.get(0).set((int) (rect.left * ratio * 2), (int) (rect.top * ratio * 2),
+                            mRect.set((int) (rect.left * ratio * 2), (int) (rect.top * ratio * 2),
                                     (int) (rect.right * ratio * 2), (int) (rect.bottom * ratio * 2));
 
                             Mat submat = mMatTensor.submat(new org.opencv.core.Rect((int) rect.left, (int) rect.top, (int) rect.width(), (int) rect.height()));
@@ -511,15 +520,15 @@ public class MainActivity extends AppCompatActivity implements
                             EventBus.getDefault().post(edges);
 
                         } else {
-                            mRects.get(0).set(0, 0, 0, 0);
+                            mRect.set(0, 0, 0, 0);
                         }
 
                         mClone.release();
-                        EventBus.getDefault().post(mRects);
+                        EventBus.getDefault().post(mRect);
                     }
 
-                    mRects.get(0).set(0, 0, 0, 0);
-                    EventBus.getDefault().post(mRects);
+                    mRect.set(0, 0, 0, 0);
+                    EventBus.getDefault().post(mRect);
                 }
             }).start();
         }
@@ -550,7 +559,7 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
-    public void refreshRect(ArrayList<Rect> rect) {
+    public void refreshRect(Rect rect) {
         mRectView.setRect(rect);
     }
 
@@ -616,6 +625,9 @@ public class MainActivity extends AppCompatActivity implements
         //opencv
         mJava_camera.disableView();
         exitTracking();
+        mDetection = false;
+        mDetectionLite = false;
+        mClassify = false;
 
         //hand
 //        mGesture.release();
@@ -631,15 +643,20 @@ public class MainActivity extends AppCompatActivity implements
         display.getSize(point);
         ratio = point.y / 480.0f;
 
+        mRatioWidth = (width + 0f) / TF_OD_API_INPUT_SIZE * 3;
+        mRatioHeight = (height + 0f) / TF_OD_API_INPUT_SIZE * 3;
+
         mMat = new Mat(480, 640, CvType.CV_8UC3);
         mMatDraw = new Mat(480, 640, CvType.CV_8UC4);
         mMatGray = new Mat(480, 640, CvType.CV_8UC1);
         mMatTensor = new Mat(240, 320, CvType.CV_8UC3);
+        mMatLite = new Mat(TF_OD_API_INPUT_SIZE, TF_OD_API_INPUT_SIZE, CvType.CV_8UC4);
 
         mBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         mBitmapDraw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        mBitmapLite = Bitmap.createBitmap(TF_OD_API_INPUT_SIZE, TF_OD_API_INPUT_SIZE, Bitmap.Config.ARGB_8888);
 
-        mPalmDetector = new ObjectDetector(getApplicationContext(), R.raw.face, 4, 0.04F, 0.08F, new Scalar(255, 0, 255, 255));
+        mPalmDetector = new ObjectDetector(getApplicationContext(), R.raw.haarcascade_fullbody, 4, 0.04F, 0.08F, new Scalar(255, 0, 255, 255));
         mObject = new MatOfRect();
 
         String proto = getPath("MobileNetSSD_deploy.prototxt", this);
@@ -666,6 +683,7 @@ public class MainActivity extends AppCompatActivity implements
             Utils.matToBitmap(mRgba, mBitmap);
         }
 
+        //利用tensorflo分类物体
         if (mClassify) {
             if (!detection) {
                 detection = true;
@@ -727,12 +745,50 @@ public class MainActivity extends AppCompatActivity implements
             }
         }
 
+        //利用tensorflowLite识别手势
+        if (mDetectionLite) {
+            if (!detection) {
+                detection = true;
+                final Mat clone = mRgba.clone();
+
+                runInBackground(new Runnable() {
+                    @Override
+                    public void run() {
+                        Mat ss = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
+
+//                        Imgproc.resize(clone, mMatLite, mMatLite.size());
+                        Utils.matToBitmap(ss, mBitmapLite);
+
+                        final List<Classifier.Recognition> results = detector_lite.recognizeImage(mBitmapLite);
+                        Classifier.Recognition recognition = results.get(0);
+
+                        if (recognition.getConfidence() > 0.4) {
+                            mRectView.text = recognition.getTitle();
+                            RectF rectF = recognition.getLocation();
+
+//                            mRect.set((int) (rectF.left * mRatioWidth), (int) (rectF.top * mRatioHeight),
+//                                    (int) (rectF.right * mRatioWidth), (int) (rectF.bottom * mRatioHeight));
+
+                            mRect.set((int) (rectF.left * 3 + 208), (int) (rectF.top * 3 + 128),
+                                    (int) (rectF.right * 3 + 208), (int) (rectF.bottom * 3 + 128));
+                        } else {
+                            mRect.setEmpty();
+                        }
+
+                        EventBus.getDefault().post(mRect);
+                        clone.release();
+                        detection = false;
+                    }
+                });
+            }
+        }
+
         mUpdated = true;
         return mRgba;
     }
 
     private Mat mMat, mMatDraw;
-    private Mat mMatTensor;
+    private Mat mMatTensor, mMatLite;
     private Mat mMatGray;
     private Scalar mScalar = new Scalar(0, 0, 0, 0);
     private float ratio = 1;        //屏幕分辨率与视频分辨率之比
