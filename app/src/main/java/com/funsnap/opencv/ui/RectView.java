@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
@@ -22,13 +23,13 @@ public class RectView extends View {
     Rect mRect = new Rect();
     private Paint mPaint;
     public String text;
+    public boolean mDetectionFail = false, mClicked = false;
+    private Path mPath = new Path();
+    private int mLineLength = 20;
 
     //是否可以触摸绘制框
     public boolean isTouchMode = true;
-    private int downX;
-    private int downY;
-    private int moveX;
-    private int moveY;
+    private int downX, downY, moveX, moveY;
     private ITouchEvent mTouchListener;
     private Paint mPaintText;
 
@@ -39,9 +40,8 @@ public class RectView extends View {
 
     private void init() {
         mPaint = new Paint();
-        mPaint.setStyle(Paint.Style.STROKE);
-        mPaint.setStrokeWidth(4.0f);
-        mPaint.setColor(Color.parseColor("#00ffff"));
+        mPaint.setStyle(Paint.Style.FILL);
+        mPaint.setStrokeWidth(6.0f);
 //        mPaint.setPathEffect(new DashPathEffect(new float[]{10, 10}, 0));
 
         mPaintText = new Paint();
@@ -59,7 +59,37 @@ public class RectView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
-        canvas.drawRect(mRect, mPaint);
+        if (mDetectionFail) {
+            mPaint.setColor(Color.RED);
+        } else {
+            mPaint.setColor(Color.GREEN);
+        }
+
+        if (mRect.centerX() != 0) {
+            mPaint.setAlpha(255);
+            mPath.reset();
+            mPath.moveTo(mRect.left, mRect.top + mLineLength);
+            mPath.lineTo(mRect.left, mRect.top);
+            mPath.lineTo(mRect.left + mLineLength, mRect.top);
+
+            mPath.moveTo(mRect.right - mLineLength, mRect.top);
+            mPath.lineTo(mRect.right, mRect.top);
+            mPath.lineTo(mRect.right, mRect.top + mLineLength);
+
+            mPath.moveTo(mRect.right, mRect.bottom - mLineLength);
+            mPath.lineTo(mRect.right, mRect.bottom);
+            mPath.lineTo(mRect.right - mLineLength, mRect.bottom);
+
+            mPath.moveTo(mRect.left + mLineLength, mRect.bottom);
+            mPath.lineTo(mRect.left, mRect.bottom);
+            mPath.lineTo(mRect.left, mRect.bottom - mLineLength);
+
+            canvas.drawPath(mPath, mPaint);
+
+            mPaint.setAlpha(30);
+            canvas.drawRect(mRect,mPaint);
+        }
+
         if (text != null) {
             canvas.drawText(text, mRect.right, mRect.top, mPaintText);
         }
@@ -74,6 +104,8 @@ public class RectView extends View {
 
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
+                if (!mClicked) return false;
+
                 if (null != mTouchListener) {
                     mTouchListener.onDown();
                 }

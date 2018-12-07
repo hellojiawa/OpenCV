@@ -13,13 +13,12 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.Display;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.CompoundButton;
 import android.widget.ImageView;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.Switch;
 
 import com.funsnap.opencv.R;
@@ -51,7 +50,6 @@ import org.opencv.imgproc.Imgproc;
 import org.opencv.me.ObjectDetector;
 import org.opencv.tracking.MultiTracker;
 import org.opencv.tracking.Tracker;
-import org.opencv.tracking.TrackerKCF;
 import org.opencv.tracking.TrackerMOSSE;
 import org.opencv.tracking.TrackerTLD;
 import org.tensorflow.demo.Classifier;
@@ -62,11 +60,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity implements
-        CameraBridgeViewBase.CvCameraViewListener2,
-        CompoundButton.OnCheckedChangeListener {
+        CameraBridgeViewBase.CvCameraViewListener2 {
 
     private static final int REQUEST_CODE = 100;
     private static String[] PERMISSIONS = {
@@ -96,14 +94,13 @@ public class MainActivity extends AppCompatActivity implements
     private boolean mTracking = false;
     private boolean mDetection, mClassify = false, mDetectionLite = false;
     private Rect2d mRect2d = new Rect2d(0, 0, 0, 0);
-    private int mButtonID;
     private boolean mUpdated = false;
 
     MultiTracker mMultiTracker = null;
     MatOfRect2d mMatOfRect2d = null;
     Rect mRect = new Rect();
+    LinkedList<Rect> mRects = new LinkedList<>();
     ArrayList<TrackerMOSSE> mTrackerMOSSES = new ArrayList<>();
-    private RadioGroup mRadioGroup;
     private ObjectDetector mPalmDetector;
     private MatOfRect mObject;
     private TensorFlowObjectDetectionAPIModel detector;
@@ -115,6 +112,8 @@ public class MainActivity extends AppCompatActivity implements
     private Classifier detector_lite;
     private float mRatioWidth;
     private float mRatioHeight;
+
+    private boolean followFail, mLockTarget;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -170,28 +169,33 @@ public class MainActivity extends AppCompatActivity implements
         mJava_camera = findViewById(R.id.java_camera);
         mJava_camera.setCvCameraViewListener(this);
 
-        mRadioGroup = findViewById(R.id.icon_group);
-
         mPreImageView = findViewById(R.id.image_view);
 
         mRectView = findViewById(R.id.rect_view);
         mRectView.setTouchListener(new RectView.ITouchEvent() {
             @Override
             public void onDown() {
-                exitTracking();
+                mRectView.reset();
+                mTracking = false;
             }
 
             @Override
             public void onUp(Rect target) {
-                startSingleTrack(target);
-                disableRadioGroup(mRadioGroup);
+                startTracking(target);
             }
         });
 
-        findViewById(R.id.btn_clear).setOnClickListener(new View.OnClickListener() {
+        Switch switch_follow = findViewById(R.id.switch_follow);
+        switch_follow.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
-            public void onClick(View v) {
-                exitTracking();
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    mRectView.mClicked = true;
+                } else {
+                    mRectView.mClicked = false;
+                    mRectView.reset();
+                    mTracking = false;
+                }
             }
         });
 
@@ -232,79 +236,67 @@ public class MainActivity extends AppCompatActivity implements
                 }
             }
         });
-
-        RadioButton rbKFC = findViewById(R.id.rb_kfc);
-        rbKFC.setOnCheckedChangeListener(this);
-        rbKFC.setChecked(true);
-        mButtonID = R.id.rb_kfc;
-        RadioButton rbMosse = findViewById(R.id.rb_mosse);
-        rbMosse.setOnCheckedChangeListener(this);
-        RadioButton rbTLD = findViewById(R.id.rb_tld);
-        rbTLD.setOnCheckedChangeListener(this);
-        RadioButton rbMulti = findViewById(R.id.rb_multi);
-        rbMulti.setOnCheckedChangeListener(this);
     }
 
-    public void disableRadioGroup(RadioGroup testRadioGroup) {
-        for (int i = 0; i < testRadioGroup.getChildCount(); i++) {
-            testRadioGroup.getChildAt(i).setEnabled(false);
-        }
-    }
-
-    public void enableRadioGroup(RadioGroup testRadioGroup) {
-        for (int i = 0; i < testRadioGroup.getChildCount(); i++) {
-            testRadioGroup.getChildAt(i).setEnabled(true);
-        }
-    }
-
-    private void exitTracking() {
-        mRectView.reset();
-        mTracking = false;
-        enableRadioGroup(mRadioGroup);
-    }
-
-    @Override
-    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-        if (isChecked) {
-            mButtonID = buttonView.getId();
-        }
-    }
-
-    private void startSingleTrack(final Rect target) {
+    private void startTracking(final Rect target) {
         if (!mTracking) {
+            mTracking = true;
+
             new Thread(new Runnable() {
+                private int errorCount = 0;
+
                 @Override
                 public void run() {
-                    mTracking = true;
-
-                    Tracker tracker = getTracker();
+                    Tracker trackerMosse = TrackerMOSSE.create();
 
                     synchronized (MainActivity.class) {
-                        tracker.init(mMat, new Rect2d(target.left / ratio, target.top / ratio,
+                        trackerMosse.init(mMat, new Rect2d(target.left / ratio, target.top / ratio,
                                 target.width() / ratio, target.height() / ratio));
                     }
 
                     while (mTracking) {
-
                         if (mUpdated) {
                             mUpdated = false;
+                            synchronized (MainActivity.class) {
+                                trackerMosse.update(mMat, mRect2d);
+                            }
 
-                            //克隆一份
-                            if (mButtonID == R.id.rb_tld || mButtonID == R.id.rb_kfc) {
-                                Mat clone = null;
-                                synchronized (MainActivity.class) {
-                                    clone = mMat.clone();
-                                }
-                                tracker.update(clone, mRect2d);
-                                clone.release();
+                            if (mRect2d.width > 0) {
+                                mRect.set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
+                                        (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
+
+
                             } else {
-                                synchronized (MainActivity.class) {
-                                    tracker.update(mMat, mRect2d);
+                                if (++errorCount > 10) {
+
+                                    followFail = true;
                                 }
                             }
 
-                            mRect.set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
-                                    (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
+                            if (followFail) {
+                                mRectView.mDetectionFail = true;
+                            } else {
+                                mRectView.mDetectionFail = false;
+                            }
+
+                            //TLD识别到目标，则初始化
+                            if (followFail && mLockTarget) {
+                                followFail = false;
+                                mLockTarget = false;
+                                errorCount = 0;
+
+                                trackerMosse.clear();
+                                trackerMosse = TrackerMOSSE.create();
+                                synchronized (MainActivity.class) {
+                                    Rect rect = mRects.getLast();
+                                    trackerMosse.init(mMat, new Rect2d(rect.left / ratio, rect.top / ratio,
+                                            rect.width() / ratio, rect.height() / ratio));
+                                }
+
+                                mRects.clear();
+                                Log.d("liuping", "重新初始化:" + "");
+                            }
+
                             EventBus.getDefault().post(mRect);
                         } else {
                             SystemClock.sleep(4);
@@ -312,12 +304,61 @@ public class MainActivity extends AppCompatActivity implements
 
                     }
 
-                    mRect.set(0, 0, 0, 0);
+                    mRect.setEmpty();
                     EventBus.getDefault().post(mRect);
-                    tracker.clear();
+                    trackerMosse.clear();
+                }
+            }).start();
+
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+
+                    Tracker trackerTLD = TrackerTLD.create();
+                    synchronized (MainActivity.class) {
+                        trackerTLD.init(mMat, new Rect2d(target.left / ratio, target.top / ratio,
+                                target.width() / ratio, target.height() / ratio));
+                    }
+
+                    while (mTracking) {
+                        Mat clone = mMat.clone();
+                        trackerTLD.update(clone, mRect2d);
+
+                        Rect rect = new Rect((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
+                                (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
+
+                        mRects.addLast(rect);
+                        if (mRects.size() > 3) mRects.removeFirst();
+                        if (mRects.size() == 3 && lookTarget(mRects)) {
+                            mLockTarget = true;
+                        } else {
+                            mLockTarget = false;
+                        }
+
+                        clone.release();
+                    }
+                    trackerTLD.clear();
                 }
             }).start();
         }
+    }
+
+    //是否锁定目标
+    private boolean lookTarget(LinkedList<Rect> list) {
+        int xMin = 1000, xMax = 0, yMin = 1000, yMax = 0;
+
+        for (Rect rect : list) {
+            int centerX = rect.centerX();
+            int centerY = rect.centerY();
+            if (centerX < xMin) xMin = centerX;
+            if (centerX > xMax) xMax = centerX;
+
+            if (centerY < yMin) yMin = centerY;
+            if (centerY > yMax) yMax = centerY;
+        }
+
+        int t = (xMax - xMin) * (yMax - yMin);
+        return t < 1000;
     }
 
 //    private void startMultiTrack(final Rect target) {
@@ -454,7 +495,7 @@ public class MainActivity extends AppCompatActivity implements
                             mRect.set((int) (rect.x * ratio), (int) (rect.y * ratio),
                                     (int) ((rect.x + rect.width) * ratio), (int) ((rect.y + rect.height) * ratio));
 
-//                            startSingleTrack(mRects.get(0));
+//                            startTracking(mRects.get(0));
 //                            mDetection = false;
                         } else {
                             mRect.set(0, 0, 0, 0);
@@ -534,30 +575,6 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-
-    private Tracker getTracker() {
-        Tracker tracker = null;
-        switch (mButtonID) {
-            case R.id.rb_kfc:
-                tracker = TrackerKCF.create();
-                break;
-
-            case R.id.rb_mosse:
-                tracker = TrackerMOSSE.create();
-                break;
-
-            case R.id.rb_tld:
-                tracker = TrackerTLD.create();
-                break;
-
-            default:
-                tracker = TrackerKCF.create();
-                break;
-        }
-
-        return tracker;
-    }
-
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void refreshRect(Rect rect) {
         mRectView.setRect(rect);
@@ -624,7 +641,7 @@ public class MainActivity extends AppCompatActivity implements
 
         //opencv
         mJava_camera.disableView();
-        exitTracking();
+        mTracking = false;
         mDetection = false;
         mDetectionLite = false;
         mClassify = false;
@@ -754,10 +771,10 @@ public class MainActivity extends AppCompatActivity implements
                 runInBackground(new Runnable() {
                     @Override
                     public void run() {
-                        Mat ss = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
+//                        Mat ss = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
 
-//                        Imgproc.resize(clone, mMatLite, mMatLite.size());
-                        Utils.matToBitmap(ss, mBitmapLite);
+                        Imgproc.resize(clone, mMatLite, mMatLite.size());
+                        Utils.matToBitmap(mMatLite, mBitmapLite);
 
                         final List<Classifier.Recognition> results = detector_lite.recognizeImage(mBitmapLite);
                         Classifier.Recognition recognition = results.get(0);
@@ -766,11 +783,11 @@ public class MainActivity extends AppCompatActivity implements
                             mRectView.text = recognition.getTitle();
                             RectF rectF = recognition.getLocation();
 
-//                            mRect.set((int) (rectF.left * mRatioWidth), (int) (rectF.top * mRatioHeight),
-//                                    (int) (rectF.right * mRatioWidth), (int) (rectF.bottom * mRatioHeight));
+                            mRect.set((int) (rectF.left * mRatioWidth), (int) (rectF.top * mRatioHeight),
+                                    (int) (rectF.right * mRatioWidth), (int) (rectF.bottom * mRatioHeight));
 
-                            mRect.set((int) (rectF.left * 3 + 208), (int) (rectF.top * 3 + 128),
-                                    (int) (rectF.right * 3 + 208), (int) (rectF.bottom * 3 + 128));
+//                            mRect.set((int) (rectF.left * 3 + 208), (int) (rectF.top * 3 + 128),
+//                                    (int) (rectF.right * 3 + 208), (int) (rectF.bottom * 3 + 128));
                         } else {
                             mRect.setEmpty();
                         }
