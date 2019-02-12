@@ -19,6 +19,7 @@ android {
         }
 
         ndk {
+            ldLibs "log"
             abiFilters 'armeabi-v7a'
         }
     }
@@ -54,4 +55,5 @@ dependencies {
     implementation 'org.tensorflow:tensorflow-android:1.10.0'
     implementation files('libs/ZHTJgesture_V1.1.jar')
     implementation files('libs/classes.jar')
+//    implementation "org.tensorflow:tensorflow-lite:+"
 }

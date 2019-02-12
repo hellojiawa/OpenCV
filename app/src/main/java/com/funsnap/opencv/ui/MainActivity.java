@@ -17,6 +17,7 @@ import android.util.Log;
 import android.view.Display;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.ImageView;
 import android.widget.Switch;
@@ -28,6 +29,7 @@ import com.funsnap.opencv.tensorflower.classifier.Recognition;
 import com.funsnap.opencv.tensorflower.classifier.impl.TensorFlowObjectDetectionAPIModel;
 import com.thinkjoy.zhthinkjoygesturedetectlib.GestureInfo;
 import com.thinkjoy.zhthinkjoygesturedetectlib.ZHThinkjoyGesture;
+import com.utility.FollowUtil;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -73,9 +75,6 @@ public class MainActivity extends AppCompatActivity implements
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     };
 
-//    private static final String TF_OD_API_MODEL_FILE = "file:///android_asset/hand.pb";
-//    private static final String TF_OD_API_LABELS_FILE = "hand_labels.txt";
-
     private static final String TF_OD_API_MODEL_FILE = "file:///android_asset/ssd5_optimized_inference_graph.pb";
     private static final String TF_OD_API_LABELS_FILE = "hand_label_map.txt";
 
@@ -86,13 +85,14 @@ public class MainActivity extends AppCompatActivity implements
     private static final String TF_OD_API_LABELS_FILE_LITE = "file:///android_asset/labels_hand.txt";
 
 
-    private static final Float MINIMUM_CONFIDENCE_TF_OD_API = 0.3f;
+    private static final Float MINIMUM_CONFIDENCE_TF_OD_API = 0.5f;
 
     private JavaCameraView mJava_camera;
     private RectView mRectView;
 
     private boolean mTracking = false;
     private boolean mDetection, mClassify = false, mDetectionLite = false;
+    private boolean mFlip = false;  //是否翻转
     private Rect2d mRect2d = new Rect2d(0, 0, 0, 0);
     private boolean mUpdated = false;
 
@@ -182,6 +182,24 @@ public class MainActivity extends AppCompatActivity implements
             @Override
             public void onUp(Rect target) {
                 startTracking(target);
+//                getTarget(target);
+            }
+        });
+
+        CheckBox cbCamera = findViewById(R.id.cb_camera);
+        cbCamera.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    mJava_camera.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_FRONT);
+                    mFlip = true;
+                } else {
+                    mJava_camera.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
+                    mFlip = false;
+                }
+
+                mJava_camera.disableView();
+                mJava_camera.enableView();
             }
         });
 
@@ -238,10 +256,88 @@ public class MainActivity extends AppCompatActivity implements
         });
     }
 
+
+    /*
+     * byte[] data保存的是纯RGB的数据，而非完整的图片文件数据
+     */
+    static public Bitmap createMyBitmap(byte[] data, int width, int height) {
+        int[] colors = convertByteToColor(data);
+        if (colors == null) {
+            return null;
+        }
+
+        Bitmap bmp = null;
+
+        try {
+            bmp = Bitmap.createBitmap(colors, 0, width, width, height,
+                    Bitmap.Config.ARGB_8888);
+        } catch (Exception e) {
+            // TODO: handle exception
+
+            return null;
+        }
+
+        return bmp;
+    }
+
+
+    /*
+     * 将RGB数组转化为像素数组
+     */
+    private static int[] convertByteToColor(byte[] data) {
+        int size = data.length;
+        if (size == 0) {
+            return null;
+        }
+
+
+        // 理论上data的长度应该是3的倍数，这里做个兼容
+        int arg = 0;
+        if (size % 3 != 0) {
+            arg = 1;
+        }
+
+        int[] color = new int[size / 3 + arg];
+        int red, green, blue;
+
+
+        if (arg == 0) {                                    //  正好是3的倍数
+            for (int i = 0; i < color.length; ++i) {
+
+                color[i] = (data[i * 3] << 16 & 0x00FF0000) |
+                        (data[i * 3 + 1] << 8 & 0x0000FF00) |
+                        (data[i * 3 + 2] & 0x000000FF) |
+                        0xFF000000;
+            }
+        } else {                                        // 不是3的倍数
+            for (int i = 0; i < color.length - 1; ++i) {
+                color[i] = (data[i * 3] << 16 & 0x00FF0000) |
+                        (data[i * 3 + 1] << 8 & 0x0000FF00) |
+                        (data[i * 3 + 2] & 0x000000FF) |
+                        0xFF000000;
+            }
+
+            color[color.length - 1] = 0xFF000000;                    // 最后一个像素用黑色填充
+        }
+
+        return color;
+    }
+
     private void startTracking(final Rect target) {
         if (!mTracking) {
             mTracking = true;
 
+            //锁定目标
+            Rect rectIn = new Rect((int) (target.left / ratio), (int) (target.top / ratio),
+                    (int) (target.right / ratio), (int) (target.bottom / ratio));
+            final Rect rectOut = new Rect();
+
+            Mat matRgba = new Mat(mMat.size(), CvType.CV_8UC4);
+            Imgproc.cvtColor(mMat, matRgba, Imgproc.COLOR_RGB2RGBA);
+            Utils.matToBitmap(matRgba, mBitmap);
+            FollowUtil.getTarget(mBitmap, mBitmap.getWidth(), mBitmap.getHeight(), rectIn, rectOut);
+
+            //mosse 跟踪
             new Thread(new Runnable() {
                 private int errorCount = 0;
 
@@ -249,57 +345,58 @@ public class MainActivity extends AppCompatActivity implements
                 public void run() {
                     Tracker trackerMosse = TrackerMOSSE.create();
 
+                    //初始化目标
                     synchronized (MainActivity.class) {
-                        trackerMosse.init(mMat, new Rect2d(target.left / ratio, target.top / ratio,
-                                target.width() / ratio, target.height() / ratio));
+                        trackerMosse.init(mMat, new Rect2d(rectOut.left, rectOut.top,
+                                rectOut.width(), rectOut.height()));
                     }
 
                     while (mTracking) {
                         if (mUpdated) {
                             mUpdated = false;
-                            synchronized (MainActivity.class) {
-                                trackerMosse.update(mMat, mRect2d);
-                            }
-
-                            if (mRect2d.width > 0) {
-                                mRect.set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
-                                        (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
-
-
-                            } else {
-                                if (++errorCount > 10) {
-
-                                    followFail = true;
-                                }
-                            }
 
                             if (followFail) {
-                                mRectView.mDetectionFail = true;
-                            } else {
-                                mRectView.mDetectionFail = false;
-                            }
+                                //TLD识别到目标，则初始化
+                                if (mLockTarget) {
+                                    followFail = false;
+                                    mLockTarget = false;
+                                    errorCount = 0;
 
-                            //TLD识别到目标，则初始化
-                            if (followFail && mLockTarget) {
-                                followFail = false;
-                                mLockTarget = false;
-                                errorCount = 0;
+                                    trackerMosse.clear();
+                                    trackerMosse = TrackerMOSSE.create();
+                                    synchronized (MainActivity.class) {
+                                        Rect rect = mRects.getLast();
+                                        trackerMosse.init(mMat, new Rect2d(rect.left / ratio, rect.top / ratio,
+                                                rect.width() / ratio, rect.height() / ratio));
+                                    }
 
-                                trackerMosse.clear();
-                                trackerMosse = TrackerMOSSE.create();
-                                synchronized (MainActivity.class) {
-                                    Rect rect = mRects.getLast();
-                                    trackerMosse.init(mMat, new Rect2d(rect.left / ratio, rect.top / ratio,
-                                            rect.width() / ratio, rect.height() / ratio));
+                                    mRects.clear();
+                                    Log.d("liuping", "重新初始化:" + "");
+                                } else {
+                                    SystemClock.sleep(5);
                                 }
 
-                                mRects.clear();
-                                Log.d("liuping", "重新初始化:" + "");
+                                mRectView.mDetectionFail = true;
+                            } else {
+                                synchronized (MainActivity.class) {
+                                    trackerMosse.update(mMat, mRect2d);
+                                }
+
+                                if (mRect2d.width > 0) {
+                                    mRect.set((int) (mRect2d.x * ratio), (int) (mRect2d.y * ratio),
+                                            (int) ((mRect2d.x + mRect2d.width) * ratio), (int) ((mRect2d.y + mRect2d.height) * ratio));
+                                } else {
+                                    if (++errorCount > 10) {
+                                        followFail = true;
+                                    }
+                                }
+
+                                mRectView.mDetectionFail = false;
                             }
 
                             EventBus.getDefault().post(mRect);
                         } else {
-                            SystemClock.sleep(4);
+                            SystemClock.sleep(5);
                         }
 
                     }
@@ -310,14 +407,15 @@ public class MainActivity extends AppCompatActivity implements
                 }
             }).start();
 
+            //当mosse跟丢的时候，利用TLC重新初始化跟踪
             new Thread(new Runnable() {
                 @Override
                 public void run() {
 
                     Tracker trackerTLD = TrackerTLD.create();
                     synchronized (MainActivity.class) {
-                        trackerTLD.init(mMat, new Rect2d(target.left / ratio, target.top / ratio,
-                                target.width() / ratio, target.height() / ratio));
+                        trackerTLD.init(mMat, new Rect2d(rectOut.left, rectOut.top,
+                                rectOut.width(), rectOut.height()));
                     }
 
                     while (mTracking) {
@@ -550,18 +648,9 @@ public class MainActivity extends AppCompatActivity implements
 
                             Mat submat = mMatTensor.submat(new org.opencv.core.Rect((int) rect.left, (int) rect.top, (int) rect.width(), (int) rect.height()));
 
-                            //canny边缘检测
-                            Imgproc.GaussianBlur(submat, submat, new Size(3, 3), 0);
-                            Mat gray = new Mat();
-                            Imgproc.cvtColor(submat, gray, Imgproc.COLOR_RGB2GRAY);
-                            Mat edges = new Mat();
-                            Imgproc.Canny(gray, edges, 50, 150, 3, true);
-
-
-                            EventBus.getDefault().post(edges);
 
                         } else {
-                            mRect.set(0, 0, 0, 0);
+                            mRect.setEmpty();
                         }
 
                         mClone.release();
@@ -690,6 +779,9 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         Mat mRgba = inputFrame.rgba();
+        if (mFlip) {
+            Core.flip(mRgba, mRgba, 0);
+        }
 
         synchronized (MainActivity.class) {
             mMatGray = inputFrame.gray();
@@ -771,25 +863,27 @@ public class MainActivity extends AppCompatActivity implements
                 runInBackground(new Runnable() {
                     @Override
                     public void run() {
-//                        Mat ss = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
+                        Mat sub = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
 
-                        Imgproc.resize(clone, mMatLite, mMatLite.size());
-                        Utils.matToBitmap(mMatLite, mBitmapLite);
+//                        Imgproc.resize(clone, mMatLite, mMatLite.size());
+                        Utils.matToBitmap(sub, mBitmapLite);
 
                         final List<Classifier.Recognition> results = detector_lite.recognizeImage(mBitmapLite);
                         Classifier.Recognition recognition = results.get(0);
 
-                        if (recognition.getConfidence() > 0.4) {
+                        if (recognition.getConfidence() > 0.3) {
                             mRectView.text = recognition.getTitle();
                             RectF rectF = recognition.getLocation();
+//
+//                            mRect.set((int) (rectF.left * mRatioWidth), (int) (rectF.top * mRatioHeight),
+//                                    (int) (rectF.right * mRatioWidth), (int) (rectF.bottom * mRatioHeight));
 
-                            mRect.set((int) (rectF.left * mRatioWidth), (int) (rectF.top * mRatioHeight),
-                                    (int) (rectF.right * mRatioWidth), (int) (rectF.bottom * mRatioHeight));
-
-//                            mRect.set((int) (rectF.left * 3 + 208), (int) (rectF.top * 3 + 128),
-//                                    (int) (rectF.right * 3 + 208), (int) (rectF.bottom * 3 + 128));
+                            mRect.set((int) ((rectF.left + 208) * ratio), (int) ((rectF.top + 128) * ratio),
+                                    (int) ((rectF.right + 208) * ratio), (int) ((rectF.bottom + 128) * ratio));
+                            Log.d("liuping", ":" + "识别成功");
                         } else {
                             mRect.setEmpty();
+                            Log.d("liuping", "识别失败:" + "");
                         }
 
                         EventBus.getDefault().post(mRect);

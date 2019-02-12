@@ -5,6 +5,7 @@
 #include<algorithm>
 #include<unordered_map>
 #include <android/log.h>
+
 #define LOGI(...)  __android_log_print(ANDROID_LOG_INFO, "liuping", __VA_ARGS__)
 
 using namespace std;
