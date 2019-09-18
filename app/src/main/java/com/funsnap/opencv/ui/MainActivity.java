@@ -25,11 +25,12 @@ import android.widget.Switch;
 import com.funsnap.opencv.R;
 import com.funsnap.opencv.permission.PerActivity;
 import com.funsnap.opencv.permission.PerChecker;
-import com.funsnap.opencv.tensorflower.classifier.Recognition;
-import com.funsnap.opencv.tensorflower.classifier.impl.TensorFlowObjectDetectionAPIModel;
+import com.funsnap.opencv.utils.Classifier;
+import com.funsnap.opencv.utils.TFLiteObjectDetectionAPIModel;
 import com.thinkjoy.zhthinkjoygesturedetectlib.GestureInfo;
 import com.thinkjoy.zhthinkjoygesturedetectlib.ZHThinkjoyGesture;
 import com.utility.FollowUtil;
+import com.utility.MatUtil;
 
 import org.greenrobot.eventbus.EventBus;
 import org.greenrobot.eventbus.Subscribe;
@@ -54,8 +55,6 @@ import org.opencv.tracking.MultiTracker;
 import org.opencv.tracking.Tracker;
 import org.opencv.tracking.TrackerMOSSE;
 import org.opencv.tracking.TrackerTLD;
-import org.tensorflow.demo.Classifier;
-import org.tensorflow.demo.TFLiteObjectDetectionAPIModel;
 
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -92,7 +91,6 @@ public class MainActivity extends AppCompatActivity implements
 
     private boolean mTracking = false;
     private boolean mDetection, mClassify = false, mDetectionLite = false;
-    private boolean mFlip = false;  //是否翻转
     private Rect2d mRect2d = new Rect2d(0, 0, 0, 0);
     private boolean mUpdated = false;
 
@@ -103,7 +101,6 @@ public class MainActivity extends AppCompatActivity implements
     ArrayList<TrackerMOSSE> mTrackerMOSSES = new ArrayList<>();
     private ObjectDetector mPalmDetector;
     private MatOfRect mObject;
-    private TensorFlowObjectDetectionAPIModel detector;
     private ImageView mPreImageView;
     private ZHThinkjoyGesture mGesture;
     private Bitmap mBitmap, mBitmapDraw, mBitmapLite;
@@ -127,7 +124,6 @@ public class MainActivity extends AppCompatActivity implements
 
         //opencv
         OpenCVLoader.initDebug();
-        mJava_camera.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
         mJava_camera.enableFpsMeter();
         mJava_camera.enableView();
 
@@ -139,16 +135,22 @@ public class MainActivity extends AppCompatActivity implements
         mGesture.init();
 
         //tensorflow lite 手势识别
-        detector_lite = TFLiteObjectDetectionAPIModel.create(
-                getResources().getAssets(),
-                TF_OD_API_MODEL_FILE_LITE,
-                TF_OD_API_LABELS_FILE_LITE,
-                TF_OD_API_INPUT_SIZE,
-                TF_OD_API_IS_QUANTIZED);
+        try {
+            detector_lite = TFLiteObjectDetectionAPIModel.create(
+                    getResources().getAssets(),
+                    TF_OD_API_MODEL_FILE_LITE,
+                    TF_OD_API_LABELS_FILE_LITE,
+                    TF_OD_API_INPUT_SIZE,
+                    TF_OD_API_IS_QUANTIZED);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
         if (new PerChecker(this).lacksPermissions(PERMISSIONS)) {
             PerActivity.startActivityForResult(this, REQUEST_CODE, PERMISSIONS);
         }
+        Mat mat = new Mat(100, 100, CvType.CV_8U);
+        MatUtil.getMat(new byte[100 * 100 * 3 / 2], 100, 100, mat.nativeObj);
     }
 
     @Override
@@ -192,10 +194,8 @@ public class MainActivity extends AppCompatActivity implements
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 if (isChecked) {
                     mJava_camera.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_FRONT);
-                    mFlip = true;
                 } else {
                     mJava_camera.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
-                    mFlip = false;
                 }
 
                 mJava_camera.disableView();
@@ -337,6 +337,7 @@ public class MainActivity extends AppCompatActivity implements
             Utils.matToBitmap(matRgba, mBitmap);
             FollowUtil.getTarget(mBitmap, mBitmap.getWidth(), mBitmap.getHeight(), rectIn, rectOut);
 
+
             //mosse 跟踪
             new Thread(new Runnable() {
                 private int errorCount = 0;
@@ -427,7 +428,7 @@ public class MainActivity extends AppCompatActivity implements
 
                         mRects.addLast(rect);
                         if (mRects.size() > 3) mRects.removeFirst();
-                        if (mRects.size() == 3 && lookTarget(mRects)) {
+                        if (mRects.size() == 3 && lockTarget(mRects)) {
                             mLockTarget = true;
                         } else {
                             mLockTarget = false;
@@ -442,7 +443,7 @@ public class MainActivity extends AppCompatActivity implements
     }
 
     //是否锁定目标
-    private boolean lookTarget(LinkedList<Rect> list) {
+    private boolean lockTarget(LinkedList<Rect> list) {
         int xMin = 1000, xMax = 0, yMin = 1000, yMax = 0;
 
         for (Rect rect : list) {
@@ -610,59 +611,59 @@ public class MainActivity extends AppCompatActivity implements
         }
     }
 
-    /**
-     * 开启手识别
-     */
-    private void startDetectionHand() {
-        if (!mDetection) {
-            new Thread(new Runnable() {
-
-                private Mat mClone;
-
-                @Override
-                public void run() {
-                    mDetection = true;
-                    if (detector == null) {
-                        try {
-                            detector = new TensorFlowObjectDetectionAPIModel(getAssets(), TF_OD_API_MODEL_FILE, TF_OD_API_LABELS_FILE, 320, 240);
-                        } catch (IOException e) {
-
-                        }
-                    }
-
-                    while (mDetection) {
-                        synchronized (MainActivity.class) {
-                            mClone = mMat.clone();
-                            Imgproc.resize(mClone, mMatTensor, new Size(320, 240));
-                        }
-
-                        List<Recognition> recognitions = detector.recognizeImage(mMatTensor);
-
-                        Recognition recognition = recognitions.get(0);
-                        final RectF rect = recognition.getLocation();
-
-                        if (rect != null && recognition.getConfidence() >= MINIMUM_CONFIDENCE_TF_OD_API) {
-                            mRectView.text = recognition.getTitle() + "\n" + String.valueOf(recognition.getConfidence());
-                            mRect.set((int) (rect.left * ratio * 2), (int) (rect.top * ratio * 2),
-                                    (int) (rect.right * ratio * 2), (int) (rect.bottom * ratio * 2));
-
-                            Mat submat = mMatTensor.submat(new org.opencv.core.Rect((int) rect.left, (int) rect.top, (int) rect.width(), (int) rect.height()));
-
-
-                        } else {
-                            mRect.setEmpty();
-                        }
-
-                        mClone.release();
-                        EventBus.getDefault().post(mRect);
-                    }
-
-                    mRect.set(0, 0, 0, 0);
-                    EventBus.getDefault().post(mRect);
-                }
-            }).start();
-        }
-    }
+//    /**
+//     * 开启手识别
+//     */
+//    private void startDetectionHand() {
+//        if (!mDetection) {
+//            new Thread(new Runnable() {
+//
+//                private Mat mClone;
+//
+//                @Override
+//                public void run() {
+//                    mDetection = true;
+//                    if (detector == null) {
+//                        try {
+//                            detector = new TensorFlowObjectDetectionAPIModel(getAssets(), TF_OD_API_MODEL_FILE, TF_OD_API_LABELS_FILE, 320, 240);
+//                        } catch (IOException e) {
+//
+//                        }
+//                    }
+//
+//                    while (mDetection) {
+//                        synchronized (MainActivity.class) {
+//                            mClone = mMat.clone();
+//                            Imgproc.resize(mClone, mMatTensor, new Size(320, 240));
+//                        }
+//
+//                        List<Recognition> recognitions = detector.recognizeImage(mMatTensor);
+//
+//                        Recognition recognition = recognitions.get(0);
+//                        final RectF rect = recognition.getLocation();
+//
+//                        if (rect != null && recognition.getConfidence() >= MINIMUM_CONFIDENCE_TF_OD_API) {
+//                            mRectView.text = recognition.getTitle() + "\n" + String.valueOf(recognition.getConfidence());
+//                            mRect.set((int) (rect.left * ratio * 2), (int) (rect.top * ratio * 2),
+//                                    (int) (rect.right * ratio * 2), (int) (rect.bottom * ratio * 2));
+//
+//                            Mat submat = mMatTensor.submat(new org.opencv.core.Rect((int) rect.left, (int) rect.top, (int) rect.width(), (int) rect.height()));
+//
+//
+//                        } else {
+//                            mRect.setEmpty();
+//                        }
+//
+//                        mClone.release();
+//                        EventBus.getDefault().post(mRect);
+//                    }
+//
+//                    mRect.set(0, 0, 0, 0);
+//                    EventBus.getDefault().post(mRect);
+//                }
+//            }).start();
+//        }
+//    }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     public void refreshRect(Rect rect) {
@@ -674,6 +675,7 @@ public class MainActivity extends AppCompatActivity implements
         Bitmap bitmap = Bitmap.createBitmap(mat.width(), mat.height(), Bitmap.Config.ARGB_8888);
         Mat m = new Mat();
         Imgproc.cvtColor(mat, m, Imgproc.COLOR_GRAY2RGBA);
+
         Utils.matToBitmap(m, bitmap);
         mPreImageView.setImageBitmap(bitmap);
 
@@ -779,10 +781,6 @@ public class MainActivity extends AppCompatActivity implements
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         Mat mRgba = inputFrame.rgba();
-        if (mFlip) {
-            Core.flip(mRgba, mRgba, 0);
-        }
-
         synchronized (MainActivity.class) {
             mMatGray = inputFrame.gray();
             Imgproc.cvtColor(mRgba, mMat, Imgproc.COLOR_RGBA2RGB);
@@ -863,10 +861,8 @@ public class MainActivity extends AppCompatActivity implements
                 runInBackground(new Runnable() {
                     @Override
                     public void run() {
-                        Mat sub = clone.submat(new org.opencv.core.Rect(208, 128, 224, 224));
-
-//                        Imgproc.resize(clone, mMatLite, mMatLite.size());
-                        Utils.matToBitmap(sub, mBitmapLite);
+                        Imgproc.resize(clone, mMatLite, mMatLite.size());
+                        Utils.matToBitmap(mMatLite, mBitmapLite);
 
                         final List<Classifier.Recognition> results = detector_lite.recognizeImage(mBitmapLite);
                         Classifier.Recognition recognition = results.get(0);
