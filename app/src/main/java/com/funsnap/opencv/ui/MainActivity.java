@@ -131,7 +131,7 @@ public class MainActivity extends AppCompatActivity implements
         EventBus.getDefault().register(this);
 
         //手势识别
-        mGesture = ZHThinkjoyGesture.getInstance(this);
+        mGesture = ZHThinkjoyGesture.getInstance();
         mGesture.init();
 
         //tensorflow lite 手势识别
